@@ -10,7 +10,11 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ROLE_NAMES = ["연맹원", "임원", "관리자"]
-WELCOME_CHANNEL_NAME = "일반"
+NATION_ROLES = ["China", "France", "Japan", "Korea (South)", "Saudi Arabia", "United Kingdom", "United States", "Vietnam"]
+VERIFIED_ROLE_NAME = "인증됨"
+WELCOME_CHANNEL_NAME = "welcome-only"
+
+user_status = {}  # user_id: {"role": bool, "nation": bool}
 
 class RoleSelectView(discord.ui.View):
     def __init__(self):
@@ -32,37 +36,75 @@ class RoleButton(discord.ui.Button):
             await interaction.response.send_message(f"'{self.role_name}' 역할이 서버에 없습니다.", ephemeral=True)
             return
 
-        removed_roles = []
         for role in user.roles:
             if role.name in ROLE_NAMES and role != new_role:
                 await user.remove_roles(role)
-                removed_roles.append(role.name)
 
         if new_role not in user.roles:
             await user.add_roles(new_role)
-            msg = f"'{self.role_name}' 역할이 부여되었습니다!"
-            if removed_roles:
-                msg += f" (이전 역할: {', '.join(removed_roles)} 제거됨)"
-        else:
-            msg = f"'{self.role_name}' 역할은 이미 부여되어 있습니다."
 
-        await interaction.response.send_message(msg, ephemeral=True)
+        # 기록
+        if user.id not in user_status:
+            user_status[user.id] = {"role": False, "nation": False}
+        user_status[user.id]["role"] = True
+        await try_verify_user(user)
+
+        await interaction.response.send_message(f"'{self.role_name}' 역할이 부여되었습니다!", ephemeral=True)
+
+class NationSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        for role_name in NATION_ROLES:
+            self.add_item(NationButton(role_name))
+
+class NationButton(discord.ui.Button):
+    def __init__(self, role_name):
+        super().__init__(label=role_name, style=discord.ButtonStyle.secondary)
+        self.role_name = role_name
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        user = interaction.user
+
+        new_role = discord.utils.get(guild.roles, name=self.role_name)
+        if not new_role:
+            await interaction.response.send_message(f"'{self.role_name}' 역할이 서버에 없습니다.", ephemeral=True)
+            return
+
+        for role in user.roles:
+            if role.name in NATION_ROLES and role != new_role:
+                await user.remove_roles(role)
+
+        if new_role not in user.roles:
+            await user.add_roles(new_role)
+
+        # 기록
+        if user.id not in user_status:
+            user_status[user.id] = {"role": False, "nation": False}
+        user_status[user.id]["nation"] = True
+        await try_verify_user(user)
+
+        await interaction.response.send_message(f"'{self.role_name}' 국적 역할이 부여되었습니다!", ephemeral=True)
+
+async def try_verify_user(user):
+    guild = user.guild
+    status = user_status.get(user.id)
+    if status and status["role"] and status["nation"]:
+        verified_role = discord.utils.get(guild.roles, name=VERIFIED_ROLE_NAME)
+        if verified_role and verified_role not in user.roles:
+            await user.add_roles(verified_role)
+            try:
+                await user.send("국적과 역할이 모두 선택되어 '인증됨' 역할이 부여되었습니다. 서버 이용이 가능합니다!")
+            except:
+                pass
 
 @bot.event
 async def on_member_join(member):
     channel = discord.utils.get(member.guild.text_channels, name=WELCOME_CHANNEL_NAME)
     if channel:
-        welcome_msg = f"""환영합니다 {member.mention}!!
-
-간단한 서버에 관한 소개를 도와드릴게요!
-
-1. 서버에 역할이 존재합니다! 들어오신 후 역할신청방에 본인의 역할(연맹원, 임원, 관리자) 중 하나를 선택해주세요! 역할 부여 후 서버 이용이 가능합니다.
-2. 상호 간의 다툼 방지를 위해 공지-규칙 채널에서 규칙을 꼭 확인해 주세요!
-3. 서버 확장, 제한 해제, 기타 서비스 요청은 서버 관리자나 임원에게 문의 부탁드립니다!
-
-아래 버튼을 눌러 본인의 역할을 선택하세요!
-"""
-        await channel.send(welcome_msg, view=RoleSelectView())
+        await channel.send(f"{member.mention}님 환영합니다! 아래에서 국적과 역할을 선택해주세요.")
+        await channel.send("**국적을 선택하세요:**", view=NationSelectView())
+        await channel.send("**역할을 선택하세요:**", view=RoleSelectView())
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -70,7 +112,41 @@ async def 역할버튼(ctx):
     await ctx.send("역할을 선택하세요!", view=RoleSelectView())
 
 @bot.command()
-async def 권한(ctx):
-    await ctx.send("아래 버튼을 눌러 본인의 역할을 선택하세요!", view=RoleSelectView())
+@commands.has_permissions(administrator=True)
+async def 국적버튼(ctx):
+    await ctx.send("국적을 선택하세요!", view=NationSelectView())
+
+@bot.command()
+async def 권한(ctx, *, 역할: str = None):
+    if 역할 is None:
+        await ctx.send("아래 버튼을 눌러 본인의 역할을 선택하세요!", view=RoleSelectView())
+        return
+
+    역할 = 역할.strip()
+    if 역할 not in ROLE_NAMES:
+        await ctx.send(f"'{역할}'은 유효한 역할이 아닙니다. 가능한 역할: {', '.join(ROLE_NAMES)}")
+        return
+
+    guild = ctx.guild
+    user = ctx.author
+    new_role = discord.utils.get(guild.roles, name=역할)
+
+    if not new_role:
+        await ctx.send(f"'{역할}' 역할이 서버에 없습니다.")
+        return
+
+    for role in user.roles:
+        if role.name in ROLE_NAMES and role != new_role:
+            await user.remove_roles(role)
+
+    if new_role not in user.roles:
+        await user.add_roles(new_role)
+        if user.id not in user_status:
+            user_status[user.id] = {"role": False, "nation": False}
+        user_status[user.id]["role"] = True
+        await try_verify_user(user)
+        await ctx.send(f"{user.mention}님에게 '{역할}' 역할이 부여되었습니다.")
+    else:
+        await ctx.send(f"{user.mention}님은 이미 '{역할}' 역할을 보유하고 있습니다.")
 
 bot.run(os.getenv("TOKEN"))
