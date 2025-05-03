@@ -69,4 +69,8 @@ async def on_member_join(member):
 async def 역할버튼(ctx):
     await ctx.send("역할을 선택하세요!", view=RoleSelectView())
 
+@bot.command()
+async def 권한(ctx):
+    await ctx.send("아래 버튼을 눌러 본인의 역할을 선택하세요!", view=RoleSelectView())
+
 bot.run(os.getenv("TOKEN"))
