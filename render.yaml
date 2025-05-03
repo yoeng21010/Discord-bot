@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: discord-role-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: TOKEN
+        value: YOUR_DISCORD_BOT_TOKEN_HERE
